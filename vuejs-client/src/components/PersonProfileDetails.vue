@@ -529,16 +529,16 @@
                     :key="att.id"
                     class="attachment-chip d-flex align-items-center gap-1 p-1 rounded-3 border bg-light hover-card"
                     style="cursor: pointer; max-width: 180px;"
-                    @click="openAttachmentModal(att.attachment_file)"
+                    @click="openAttachmentModal(att.filepath || att.file_path)"
                   >
                     <img
-                      :src="getAttachmentPath(att.attachment_file)"
+                      :src="getAttachmentPath(att.filepath || att.file_path)"
                       class="rounded-2"
                       style="width: 28px; height: 28px; object-fit: cover;"
                       alt=""
                     >
                     <span class="small text-truncate text-dark pe-1" style="font-size: 11px;">
-                      {{ att.attachment_description || att.attachment_filename }}
+                      {{ att.description || (att.filepath || att.file_path || '').split('/').pop() }}
                     </span>
                   </div>
                 </div>
@@ -566,18 +566,18 @@
           <div
             class="card border rounded-4 overflow-hidden shadow-xs hover-card h-100"
             style="cursor: pointer;"
-            @click="openAttachmentModal(att.attachment_file)"
+            @click="openAttachmentModal(att.filepath || att.file_path)"
           >
             <div class="ratio ratio-4x3 bg-light">
               <img
-                :src="getAttachmentPath(att.attachment_file)"
+                :src="getAttachmentPath(att.filepath || att.file_path)"
                 class="object-fit-cover w-100 h-100"
                 alt=""
               >
             </div>
             <div class="p-2 bg-white">
               <div class="fw-semibold text-dark text-truncate small" style="font-size: 12px;">
-                {{ att.attachment_description || att.attachment_filename }}
+                {{ att.description || (att.filepath || att.file_path || '').split('/').pop() }}
               </div>
               <div class="text-muted small text-truncate" style="font-size: 10px;">
                 {{ formatDate(att.event_date) }} &bull; {{ att.event_type }}
@@ -896,6 +896,7 @@ export default {
       return this.person.relatives.filter(r => r.relation_type === relationType)
     },
     getAttachmentPath (filepath) {
+      if (!filepath) return ''
       return this.getDataUrl() + filepath
     },
     calculateAgeAtEvent (birthDate, eventDate) {

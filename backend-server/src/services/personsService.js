@@ -195,6 +195,7 @@ const getEnrichedPerson = async (personId) => {
     event.related_attachments = eventAttachments.map(rel => ({
       id: rel.id,
       filepath: rel.file_path,
+      file_path: rel.file_path,
       description: rel.description
     }));
   }
@@ -308,7 +309,8 @@ const getChildren = async (personId) => {
 const getEventRelations = async (personId, eventId, eventType) => {
   logger.debug(`get event relations for person ${personId} and event ${eventId}`);
   let relationsQuery;
-  switch (eventType) {
+  const normalizedType = (eventType || '').toLowerCase().replace(/[\s_-]+/g, '_');
+  switch (normalizedType) {
     case 'birth':
       relationsQuery = `
         SELECT r.relation_type, p.id, p.first_name, p.last_name 
@@ -320,19 +322,21 @@ const getEventRelations = async (personId, eventId, eventType) => {
 
     case 'divorce':
     case 'marriage':
+    case 'mariage':
+    case 'civil_union':
+    case 'civil_separation':
+    case 'union_civile':
+    case 'separation_civile':
       relationsQuery = `
-        SELECT DISTINCT r.relation_type, p.id, p.first_name, p.last_name
+        SELECT DISTINCT 
+          COALESCE(r.relation_type, 'spouse') AS relation_type,
+          p.id, p.first_name, p.last_name
         FROM Persons p
-        JOIN Relatives r ON p.id = r.related_person_id
-        WHERE r.related_person_id IN (
-          SELECT p.id
-          FROM Persons p
-          JOIN Associations c ON p.id = c.person_id
-          WHERE c.event_id = ? AND c.person_id != ?
-        )
-        AND r.relation_type = 'spouse';
+        JOIN Associations c ON p.id = c.person_id
+        LEFT JOIN Relatives r ON (r.person_id = ? AND r.related_person_id = p.id)
+        WHERE c.event_id = ? AND c.person_id != ?;
       `;
-      return await runQuery(relationsQuery, [eventId, personId]);
+      return await runQuery(relationsQuery, [personId, eventId, personId]);
 
     default:
       return [];

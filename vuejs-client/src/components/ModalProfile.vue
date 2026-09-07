@@ -165,6 +165,7 @@ export default {
         : '/data'
     },
     getAttachmentPath (filepath) {
+      if (!filepath) return ''
       return this.getDataUrl() + filepath
     },
     openAttachmentModal (filepath) {

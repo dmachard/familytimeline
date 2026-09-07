@@ -1661,6 +1661,16 @@ export default {
         }
       })
 
+      const normalizeType = (t) => (t || '').toLowerCase().replace(/[\s_-]+/g, '_')
+
+      // Also include partners from mutual union events
+      ;(person.events || []).forEach(e => {
+        const nType = normalizeType(e.event_type)
+        if (['marriage', 'mariage', 'civil_union', 'union_civile', 'divorce', 'civil_separation', 'separation_civile'].includes(nType)) {
+          (e.related_persons || []).forEach(rp => spouseIds.add(rp.id))
+        }
+      })
+
       // Get the full details of the spouses from the data list
       const spouseDetails = Array.from(spouseIds).map(spouseId => {
         const spouse = { id: spouseId }
@@ -1676,23 +1686,31 @@ export default {
         let civilUnionPlace = null
         let civilSeparationDate = null
 
-        const normalizeType = (t) => (t || '').toLowerCase().replace(/[\s_-]+/g, '_')
-
         // Rassembler tous les événements mutuels du couple (depuis person ET depuis spouseDetail)
         const pEvents = (person.events || [])
-          .filter(e => (e.related_persons || []).some(rp => rp.id === spouse.id))
+          .filter(e => {
+            if ((e.related_persons || []).some(rp => rp.id === spouse.id)) return true
+            if (spouseIds.size === 1 && ['marriage', 'mariage', 'civil_union', 'union_civile', 'divorce', 'civil_separation', 'separation_civile'].includes(normalizeType(e.event_type))) return true
+            return false
+          })
         const sEvents = (spouseDetail && spouseDetail.events ? spouseDetail.events : [])
-          .filter(e => (e.related_persons || []).some(rp => rp.id === person.id))
+          .filter(e => {
+            if ((e.related_persons || []).some(rp => rp.id === person.id)) return true
+            if (spouseIds.size === 1 && ['marriage', 'mariage', 'civil_union', 'union_civile', 'divorce', 'civil_separation', 'separation_civile'].includes(normalizeType(e.event_type))) return true
+            return false
+          })
 
         // Parcourir les événements des deux conjoints pour extraire dates et lieux
         ;[...pEvents, ...sEvents].forEach(event => {
           const nType = normalizeType(event.event_type)
           switch (nType) {
             case 'marriage':
+            case 'mariage':
               if (!marriageDate && event.event_date) marriageDate = event.event_date
               if (!marriagePlace && event.event_place) marriagePlace = event.event_place
               break
             case 'civil_union':
+            case 'union_civile':
               if (!civilUnionDate && event.event_date) civilUnionDate = event.event_date
               if (!civilUnionPlace && event.event_place) civilUnionPlace = event.event_place
               break
@@ -1701,6 +1719,7 @@ export default {
               if (!divorcePlace && event.event_place) divorcePlace = event.event_place
               break
             case 'civil_separation':
+            case 'separation_civile':
               if (!civilSeparationDate && event.event_date) civilSeparationDate = event.event_date
               break
           }
@@ -1946,19 +1965,55 @@ export default {
           }
 
           // Add the period during the relationship
-          periods.push({
-            start: relationshipStartYear,
-            end: divorceYear,
-            color: spouseColor,
-            birthDateVerified,
-            deathDateVerified,
-            stillAlive: person.death_date === null,
-            isRelationship: true,
-            spouseName: `${spouse.first_name} ${spouse.last_name}`,
-            relationshipType: marriageYear ? 'marriage' : (unionYear ? 'civil_union' : 'union'),
-            marriageYear: marriageYear,
-            divorceYear: spouse.divorce_date ? new Date(spouse.divorce_date).getFullYear() : null
-          })
+          if (unionYear && marriageYear && unionYear < marriageYear && unionYear < divorceYear) {
+            const civilUnionEnd = Math.min(marriageYear, divorceYear)
+            periods.push({
+              start: unionYear,
+              end: civilUnionEnd,
+              color: spouseColor,
+              birthDateVerified,
+              deathDateVerified,
+              stillAlive: person.death_date === null,
+              isRelationship: true,
+              spouseName: `${spouse.first_name} ${spouse.last_name}`,
+              relationshipType: 'civil_union',
+              marriageYear: null,
+              civilUnionYear: unionYear,
+              divorceYear: civilUnionEnd < divorceYear ? civilUnionEnd : (spouse.divorce_date ? new Date(spouse.divorce_date).getFullYear() : null)
+            })
+
+            if (marriageYear < divorceYear) {
+              periods.push({
+                start: marriageYear,
+                end: divorceYear,
+                color: spouseColor,
+                birthDateVerified,
+                deathDateVerified,
+                stillAlive: person.death_date === null,
+                isRelationship: true,
+                spouseName: `${spouse.first_name} ${spouse.last_name}`,
+                relationshipType: 'marriage',
+                marriageYear: marriageYear,
+                civilUnionYear: unionYear,
+                divorceYear: spouse.divorce_date ? new Date(spouse.divorce_date).getFullYear() : null
+              })
+            }
+          } else {
+            periods.push({
+              start: relationshipStartYear,
+              end: divorceYear,
+              color: spouseColor,
+              birthDateVerified,
+              deathDateVerified,
+              stillAlive: person.death_date === null,
+              isRelationship: true,
+              spouseName: `${spouse.first_name} ${spouse.last_name}`,
+              relationshipType: marriageYear ? 'marriage' : (unionYear ? 'civil_union' : 'union'),
+              marriageYear: marriageYear,
+              civilUnionYear: unionYear,
+              divorceYear: spouse.divorce_date ? new Date(spouse.divorce_date).getFullYear() : null
+            })
+          }
 
           // Update the last event year to the end of this relationship
           lastEventYear = divorceYear
@@ -2654,14 +2709,15 @@ export default {
           }
 
           if (period.isRelationship) {
-            const typeLabel = period.relationshipType === 'marriage' ? 'Mariage' : 'Union'
+            const isCivil = period.relationshipType === 'civil_union'
+            const typeLabel = period.relationshipType === 'marriage' ? 'Mariage' : (isCivil ? 'Union civile' : 'Union')
             const periodDates = period.divorceYear ? `(${period.start} - ${period.divorceYear})` : `(depuis ${period.start})`
-            const unionEv = person.events ? person.events.find(e => ['marriage', 'civil union', 'civil_union'].includes((e.event_type || '').toLowerCase()) && e.event_place) : null
+            const unionEv = person.events ? person.events.find(e => ['marriage', 'mariage', 'civil union', 'civil_union', 'union civile', 'union_civile'].includes((e.event_type || '').toLowerCase()) && e.event_place) : null
             const placeSuffix = (unionEv && unionEv.event_place) ? `\n📍 ${unionEv.event_place}` : ''
-            const relTooltip = `💍 ${typeLabel} avec ${period.spouseName} ${periodDates}${placeSuffix}`
+            const relTooltip = `${isCivil ? '📜' : '💍'} ${typeLabel} avec ${period.spouseName} ${periodDates}${placeSuffix}`
             periodPath.append('title').text(relTooltip)
 
-            // Badge bijou raffiné avec alliances dorées au début de la tranche de mariage
+            // Badge bijou raffiné avec alliances dorées ou azur au début de la tranche d'union
             if (width >= 28) {
               const ringG = periodsGroup.append('g')
                 .attr('class', 'marriage-bar-badge')
@@ -2677,13 +2733,13 @@ export default {
                 .attr('height', 18)
                 .attr('rx', 9)
                 .attr('fill', 'rgba(255, 255, 255, 0.92)')
-                .attr('stroke', 'rgba(245, 158, 11, 0.5)')
+                .attr('stroke', isCivil ? 'rgba(59, 130, 246, 0.5)' : 'rgba(245, 158, 11, 0.5)')
                 .attr('stroke-width', 1)
                 .style('filter', 'drop-shadow(0 1px 3px rgba(0,0,0,0.15))')
 
-              // Deux anneaux entrelacés dorés
-              ringG.append('circle').attr('cx', -3.2).attr('cy', 0).attr('r', 4.2).attr('fill', 'none').attr('stroke', '#d97706').attr('stroke-width', 1.8)
-              ringG.append('circle').attr('cx', 3.2).attr('cy', 0).attr('r', 4.2).attr('fill', 'none').attr('stroke', '#f59e0b').attr('stroke-width', 1.8)
+              // Deux anneaux entrelacés
+              ringG.append('circle').attr('cx', -3.2).attr('cy', 0).attr('r', 4.2).attr('fill', 'none').attr('stroke', isCivil ? '#2563eb' : '#d97706').attr('stroke-width', 1.8)
+              ringG.append('circle').attr('cx', 3.2).attr('cy', 0).attr('r', 4.2).attr('fill', 'none').attr('stroke', isCivil ? '#3b82f6' : '#f59e0b').attr('stroke-width', 1.8)
               ringG.append('title').text(relTooltip)
             }
           }
@@ -3327,14 +3383,40 @@ export default {
           if (processed.has(pairKey)) return
           processed.add(pairKey)
 
-          // Date de début du pont :
-          // 1. Mariage ou union civile (le plus ancien)
+          // Date de début et segments du pont :
+          const segments = []
           const mDate = this.getYearFromDate(spouse.marriage_date)
           const uDate = this.getYearFromDate(spouse.civil_union_date)
-          let marriageYear = mDate && uDate ? Math.min(mDate, uDate) : (mDate || uDate)
 
-          // 2. Si pas de mariage ni union civile, débuter dès le 1er enfant commun (coparentalité / union libre)
-          if (!marriageYear) {
+          if (uDate && mDate && uDate < mDate) {
+            segments.push({
+              startYear: uDate,
+              endYearMax: mDate,
+              type: 'civil_union',
+              label: 'Union civile'
+            })
+            segments.push({
+              startYear: mDate,
+              endYearMax: null,
+              type: 'marriage',
+              label: 'Mariage'
+            })
+          } else if (uDate && !mDate) {
+            segments.push({
+              startYear: uDate,
+              endYearMax: null,
+              type: 'civil_union',
+              label: 'Union civile'
+            })
+          } else if (mDate) {
+            segments.push({
+              startYear: mDate,
+              endYearMax: null,
+              type: 'marriage',
+              label: 'Mariage'
+            })
+          } else {
+            // Si pas de mariage ni union civile, débuter dès le 1er enfant commun (coparentalité / union libre)
             const commonChildren = this.filterChildren(personData.id, spouse.id)
             if (commonChildren && commonChildren.length > 0) {
               const sortedKids = [...commonChildren].sort((a, b) => {
@@ -3342,11 +3424,21 @@ export default {
                 const bB = this.getYearFromDate(b.birth_date) || 9999
                 return bA - bB
               })
-              marriageYear = this.getYearFromDate(sortedKids[0].birth_date)
+              const kYear = this.getYearFromDate(sortedKids[0].birth_date)
+              if (kYear) {
+                segments.push({
+                  startYear: kYear,
+                  endYearMax: null,
+                  type: 'union',
+                  label: 'Union'
+                })
+              }
             }
           }
 
-          if (!marriageYear) return
+          if (segments.length === 0) return
+
+          const overallStartYear = segments[0].startYear
 
           // Date de fin (divorce, séparation, ou décès du premier conjoint)
           const divorceYear = this.getYearFromDate(spouse.divorce_date || spouse.civil_separation_date)
@@ -3356,24 +3448,24 @@ export default {
           const xEndPerson = personData.barEndX ?? fallbackX
           const xEndSpouse = spouseData.barEndX ?? fallbackX
 
-          let xEnd = Math.min(xEndPerson, xEndSpouse)
+          let xEndTotal = Math.min(xEndPerson, xEndSpouse)
           if (divorceYear) {
-            xEnd = Math.min(xEnd, xScale(divorceYear))
+            xEndTotal = Math.min(xEndTotal, xScale(divorceYear))
           }
 
           // Si un des conjoints est décédé, s'arrêter au premier décès
           const spouseDeathYear = spouseData.deathYear
           const personDeathYear = personData.deathYear
           if (spouseDeathYear && personDeathYear) {
-            xEnd = Math.min(xEnd, xScale(Math.min(spouseDeathYear, personDeathYear)))
+            xEndTotal = Math.min(xEndTotal, xScale(Math.min(spouseDeathYear, personDeathYear)))
           } else if (spouseDeathYear) {
-            xEnd = Math.min(xEnd, xScale(spouseDeathYear))
+            xEndTotal = Math.min(xEndTotal, xScale(spouseDeathYear))
           } else if (personDeathYear) {
-            xEnd = Math.min(xEnd, xScale(personDeathYear))
+            xEndTotal = Math.min(xEndTotal, xScale(personDeathYear))
           }
 
-          const xStart = xScale(marriageYear)
-          if (xEnd <= xStart) return
+          const overallXStart = xScale(overallStartYear)
+          if (xEndTotal <= overallXStart) return
 
           // Déterminer qui est en haut et qui est en bas
           const topData    = personData.yCenter <= spouseData.yCenter ? personData : spouseData
@@ -3408,9 +3500,9 @@ export default {
             gapTop,
             gapBottom,
             gapCenterY: (gapTop + gapBottom) / 2,
-            yearStart: marriageYear,
-            xStart,
-            xEnd,
+            yearStart: overallStartYear,
+            xStart: overallXStart,
+            xEnd: xEndTotal,
             bandColor
           })
 
@@ -3421,39 +3513,55 @@ export default {
             (!this.animatingExpansion.prevIds.has(personData.person.id) || !this.animatingExpansion.prevIds.has(spouseData.person.id))
           )
 
-          // Bande translucide élégante dans le gap reliant les époux
-          const bridgeWidth = xEnd - xStart
-          const mBand = bridgeLayer.append('rect')
-            .attr('class', 'marriage-band')
-            .attr('x', xStart)
-            .attr('y', gapTop)
-            .attr('width', bridgeWidth)
-            .attr('height', gapHeight)
-            .attr('fill', bandFill)
-            .attr('stroke', bandStroke)
-            .attr('stroke-width', 1)
-            .attr('rx', 6)
-            .attr('ry', 6)
+          // Dessiner chaque segment du pont (union civile, mariage, etc.)
+          segments.forEach(seg => {
+            const segXStart = xScale(seg.startYear)
+            let segXEnd = xEndTotal
+            if (seg.endYearMax) {
+              segXEnd = Math.min(segXEnd, xScale(seg.endYearMax))
+            }
+            if (segXEnd <= segXStart) return
 
-          // Anneaux délicats dorés au centre du pont
-          if (bridgeWidth >= 40 && gapHeight >= 14) {
-            const bridgeCenterG = bridgeLayer.append('g')
-              .attr('class', 'marriage-bridge-center-badge')
-              .attr('transform', `translate(${xStart + Math.min(22, bridgeWidth / 2)}, ${gapCenterY})`)
-              .style('pointer-events', 'none')
+            const bridgeWidth = segXEnd - segXStart
+            const mBand = bridgeLayer.append('rect')
+              .attr('class', 'marriage-band')
+              .attr('x', segXStart)
+              .attr('y', gapTop)
+              .attr('width', bridgeWidth)
+              .attr('height', gapHeight)
+              .attr('fill', bandFill)
+              .attr('stroke', bandStroke)
+              .attr('stroke-width', 1)
+              .attr('rx', 6)
+              .attr('ry', 6)
 
-            bridgeCenterG.append('circle').attr('cx', -2.5).attr('cy', 0).attr('r', 3).attr('fill', 'none').attr('stroke', '#d97706').attr('stroke-width', 1.2)
-            bridgeCenterG.append('circle').attr('cx', 2.5).attr('cy', 0).attr('r', 3).attr('fill', 'none').attr('stroke', '#f59e0b').attr('stroke-width', 1.2)
-          }
+            mBand.append('title').text(`${seg.type === 'civil_union' ? '📜' : '💍'} ${seg.label} (${seg.startYear}${seg.endYearMax ? ' - ' + seg.endYearMax : ''})`)
 
-          if (isNewCouple) {
-            mBand
-              .style('opacity', 0)
-              .transition()
-              .duration(500)
-              .ease(d3.easeCubicOut)
-              .style('opacity', 1)
-          }
+            // Anneaux délicats dorés ou bleus au centre du pont
+            if (bridgeWidth >= 40 && gapHeight >= 14) {
+              const bridgeCenterG = bridgeLayer.append('g')
+                .attr('class', 'marriage-bridge-center-badge')
+                .attr('transform', `translate(${segXStart + Math.min(22, bridgeWidth / 2)}, ${gapCenterY})`)
+                .style('pointer-events', 'none')
+
+              if (seg.type === 'civil_union') {
+                bridgeCenterG.append('circle').attr('cx', -2.5).attr('cy', 0).attr('r', 3).attr('fill', 'none').attr('stroke', '#2563eb').attr('stroke-width', 1.2)
+                bridgeCenterG.append('circle').attr('cx', 2.5).attr('cy', 0).attr('r', 3).attr('fill', 'none').attr('stroke', '#3b82f6').attr('stroke-width', 1.2)
+              } else {
+                bridgeCenterG.append('circle').attr('cx', -2.5).attr('cy', 0).attr('r', 3).attr('fill', 'none').attr('stroke', '#d97706').attr('stroke-width', 1.2)
+                bridgeCenterG.append('circle').attr('cx', 2.5).attr('cy', 0).attr('r', 3).attr('fill', 'none').attr('stroke', '#f59e0b').attr('stroke-width', 1.2)
+              }
+            }
+
+            if (isNewCouple) {
+              mBand
+                .style('opacity', 0)
+                .transition()
+                .duration(500)
+                .ease(d3.easeCubicOut)
+                .style('opacity', 1)
+            }
+          })
         })
       })
     },
